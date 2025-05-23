@@ -20,10 +20,20 @@ out vec4 FragColor;
 uniform vec3 sphere_center;
 uniform float sphere_radius;
 uniform vec3 light_pos;
+uniform vec3 light_color;
 uniform vec3 sphere_color;
 uniform vec3 bg_color;
 uniform vec3 camera_pos;
 uniform float camera_zoom;
+
+const int MAX_DEPTH = 2;
+
+struct HitInfo {
+    float t;
+    vec3 normal;
+    vec3 color;
+    float reflect;
+};
 
 // Ray-sphere intersection
 bool intersectSphere(vec3 ro, vec3 rd, out float t) {
@@ -226,225 +236,140 @@ vec3 reflectRay(vec3 I, vec3 N) {
     return I - 2.0 * dot(N, I) * N;
 }
 
-void main() {
-    // Camera setup
-    vec3 ro = camera_pos;
-    vec2 uv = (gl_FragCoord.xy / vec2(800, 600)) * 2.0 - 1.0;
-    uv.x *= 800.0/600.0;
-    uv *= camera_zoom;
-    vec3 rd = normalize(vec3(uv, -1.5)); // Ray direction
+bool sceneIntersect(vec3 ro, vec3 rd, out HitInfo hit) {
+    float t_sphere, t_pyr, t_box, t_cyl, t_pyr3;
+    vec3 n_sphere, n_pyr, n_box, n_cyl, n_pyr3;
+    bool found = false;
+    hit.t = 1e9;
 
-    // กล่อง: ตำแหน่งกลาง (0.0, -0.7, 1.0), ขนาดเล็ก (y -0.7 ถึง -0.54)
+    // Sphere
+    if (intersectSphere(ro, rd, t_sphere)) {
+        if (t_sphere > 0.001 && t_sphere < hit.t) {
+            hit.t = t_sphere;
+            vec3 phit = ro + rd * t_sphere;
+            hit.normal = normalize(phit - sphere_center);
+            hit.color = sphere_color;
+            hit.reflect = 0.5;
+            found = true;
+        }
+    }
+    // Pyramid
+    if (intersectPyramid(ro, rd, t_pyr, n_pyr)) {
+        if (t_pyr > 0.001 && t_pyr < hit.t) {
+            hit.t = t_pyr;
+            hit.normal = n_pyr;
+            hit.color = vec3(1.0, 1.0, 0.2);
+            hit.reflect = 0.15;
+            found = true;
+        }
+    }
+    // Small Pyramid
+    if (intersectPyramid3(ro, rd, t_pyr3, n_pyr3)) {
+        if (t_pyr3 > 0.001 && t_pyr3 < hit.t) {
+            hit.t = t_pyr3;
+            hit.normal = n_pyr3;
+            hit.color = vec3(0.2, 1.0, 0.3);
+            hit.reflect = 0.12;
+            found = true;
+        }
+    }
+    // Box
     vec3 box_min = vec3(-0.08, -0.7, 0.90);
     vec3 box_max = vec3(0.08, -0.54, 1.10);
-
-    float t_sphere, t_pyr, t_box, t_cyl;
-    vec3 n_pyr, n_box, n_cyl;
-    bool hit_sphere = intersectSphere(ro, rd, t_sphere);
-    bool hit_pyr = intersectPyramid(ro, rd, t_pyr, n_pyr);
-    bool hit_box = intersectBox(ro, rd, box_min, box_max, t_box, n_box);
-    // ทรงกระบอก: ติดพื้น, ขวาของพีระมิด (center = (1.0, -0.7, 0.0)), r = 0.18, h = 0.64
+    if (intersectBox(ro, rd, box_min, box_max, t_box, n_box)) {
+        if (t_box > 0.001 && t_box < hit.t) {
+            hit.t = t_box;
+            hit.normal = n_box;
+            hit.color = vec3(0.2, 0.6, 1.0);
+            hit.reflect = 0.18;
+            found = true;
+        }
+    }
+    // Cylinder
     vec3 cyl_center = vec3(1.0, -0.7, 0.0);
     float cyl_radius = 0.18;
     float cyl_ymin = -0.7;
     float cyl_ymax = -0.06;
-    bool hit_cyl = intersectCylinder(ro, rd, cyl_center, cyl_radius, cyl_ymin, cyl_ymax, t_cyl, n_cyl);
-    bool use_sphere = hit_sphere && (!hit_pyr || t_sphere < t_pyr) && (!hit_box || t_sphere < t_box) && (!hit_cyl || t_sphere < t_cyl);
-    bool use_pyr = hit_pyr && (!hit_sphere || t_pyr < t_sphere) && (!hit_box || t_pyr < t_box) && (!hit_cyl || t_pyr < t_cyl);
-    bool use_box = hit_box && (!hit_sphere || t_box < t_sphere) && (!hit_pyr || t_box < t_pyr) && (!hit_cyl || t_box < t_cyl);
-    bool use_cyl = hit_cyl && (!hit_sphere || t_cyl < t_sphere) && (!hit_pyr || t_cyl < t_pyr) && (!hit_box || t_cyl < t_box);
-    float t_pyr3;
-    vec3 n_pyr3;
-    bool hit_pyr3 = intersectPyramid3(ro, rd, t_pyr3, n_pyr3);
-    bool use_pyr3 = hit_pyr3 && (!use_sphere || t_pyr3 < t_sphere) && (!use_pyr || t_pyr3 < t_pyr) && (!use_box || t_pyr3 < t_box) && (!use_cyl || t_pyr3 < t_cyl);
-    if (use_sphere) {
-        float t = t_sphere;
-        vec3 hit = ro + rd * t;
-        vec3 normal = normalize(hit - sphere_center);
-        vec3 light_dir = normalize(light_pos - hit);
-        // Phong shading
-        float diff = max(dot(normal, light_dir), 0.0);
-        float ambient = 0.18;
-        // Specular (ลด exponent และน้ำหนัก)
-        vec3 view_dir = normalize(ro - hit);
-        vec3 reflect_dir = reflect(-light_dir, normal);
-        float spec = 0.3 * pow(max(dot(view_dir, reflect_dir), 0.0), 24.0);
-        // Soft shadow (sample 4 directions)
-        float shadow = 0.0;
-        for (int i = 0; i < 4; ++i) {
-            float angle = 3.14159 * 0.5 * float(i);
-            vec3 offset = 0.02 * (cos(angle) * normal + sin(angle) * cross(normal, light_dir));
-            float t_shadow;
-            if (intersectSphere(hit + normal * 0.001 + offset, light_dir, t_shadow)) shadow += 0.25;
-        }
-        shadow = mix(1.0, 0.5, shadow); // soft shadow เนียนขึ้น
-        // Reflection (simple, 1 bounce, ลดน้ำหนัก)
-        vec3 refl_dir = reflectRay(rd, normal);
-        float t_refl;
-        vec3 refl_col = vec3(0.0);
-        float t_plane = (-0.7 - hit.y) / refl_dir.y;
-        bool hit_sphere = intersectSphere(hit + normal * 0.01, refl_dir, t_refl);
-        bool hit_ground = (t_plane > 0.0);
-        if (hit_sphere && (!hit_ground || t_refl < t_plane)) {
-            vec3 hit2 = hit + refl_dir * t_refl;
-            vec3 n2 = normalize(hit2 - sphere_center);
-            refl_col = sphere_color * 0.7 + 0.3 * vec3(1.0);
-        } else {
-            refl_col = vec3(0.0); // ไม่สะท้อนพื้น
-        }
-        refl_col = mix(sphere_color, refl_col, 0.5); // blend reflection color for smoothness
-        vec3 color = sphere_color * (ambient + diff * shadow) + spec * vec3(1.0) + 0.12 * refl_col;
-        FragColor = vec4(color, 1.0);
-    } else if (use_pyr) {
-        vec3 hit = ro + rd * t_pyr;
-        vec3 normal = n_pyr;
-        vec3 light_dir = normalize(light_pos - hit);
-        float diff = max(dot(normal, light_dir), 0.0);
-        float ambient = 0.25; // เพิ่ม ambient ให้พีระมิดดูเหลืองขึ้น
-        vec3 view_dir = normalize(ro - hit);
-        vec3 reflect_dir = reflect(-light_dir, normal);
-        float spec = 0.2 * pow(max(dot(view_dir, reflect_dir), 0.0), 16.0);
-        // Soft shadow from sphere and pyramid (sample หลายทิศทาง)
-        float shadow = 0.0;
-        int shadow_samples = 8;
-        for (int i = 0; i < shadow_samples; ++i) {
-            float angle = 6.28318 * float(i) / float(shadow_samples);
-            vec3 offset = 0.025 * (cos(angle) * normal + sin(angle) * cross(normal, light_dir));
-            float t_shadow, t_shadow_pyr;
-            vec3 n_dummy;
-            bool shadow_sphere = intersectSphere(hit + normal * 0.001 + offset, light_dir, t_shadow) && t_shadow > 0.0;
-            bool shadow_pyr = intersectPyramid(hit + normal * 0.001 + offset, light_dir, t_shadow_pyr, n_dummy) && t_shadow_pyr > 0.0 && t_shadow_pyr < length(light_pos - hit);
-            if (shadow_sphere || shadow_pyr) shadow += 1.0;
-        }
-        shadow = 1.0 - shadow / float(shadow_samples); // soft shadow
-        shadow = mix(1.0, 0.2, 1.0 - shadow); // blend เงาให้เข้มขึ้น
-        vec3 pyr_color = vec3(1.0, 1.0, 0.2); // สีเหลือง
-        vec3 color = pyr_color * (ambient + diff * shadow) + spec * vec3(1.0);
-        FragColor = vec4(color, 1.0);
-    } else if (use_pyr3) {
-        vec3 hit = ro + rd * t_pyr3;
-        vec3 normal = n_pyr3;
-        vec3 light_dir = normalize(light_pos - hit);
-        float diff = max(dot(normal, light_dir), 0.0);
-        float ambient = 0.23;
-        vec3 view_dir = normalize(ro - hit);
-        vec3 reflect_dir = reflect(-light_dir, normal);
-        float spec = 0.18 * pow(max(dot(view_dir, reflect_dir), 0.0), 14.0);
-        // Soft shadow (sample หลายทิศทาง, ตรวจสอบทุกวัตถุ)
-        float shadow = 0.0;
-        int shadow_samples = 8;
-        for (int i = 0; i < shadow_samples; ++i) {
-            float angle = 6.28318 * float(i) / float(shadow_samples);
-            vec3 offset = 0.025 * (cos(angle) * normal + sin(angle) * cross(normal, light_dir));
-            float t_shadow, t_shadow_pyr, t_shadow_pyr3, t_shadow_box, t_shadow_cyl = 0.0;
-            vec3 n_dummy;
-            bool shadow_sphere = intersectSphere(hit + normal * 0.001 + offset, light_dir, t_shadow) && t_shadow > 0.0;
-            bool shadow_pyr = intersectPyramid(hit + normal * 0.001 + offset, light_dir, t_shadow_pyr, n_dummy) && t_shadow_pyr > 0.0 && t_shadow_pyr < length(light_pos - hit);
-            bool shadow_pyr3 = intersectPyramid3(hit + normal * 0.001 + offset, light_dir, t_shadow_pyr3, n_dummy) && t_shadow_pyr3 > 0.0 && t_shadow_pyr3 < length(light_pos - hit);
-            bool shadow_box = intersectBox(hit + normal * 0.001 + offset, light_dir, box_min, box_max, t_shadow_box, n_dummy) && t_shadow_box > 0.0 && t_shadow_box < length(light_pos - hit);
-            bool shadow_cyl = intersectCylinder(hit + normal * 0.001 + offset, light_dir, cyl_center, cyl_radius, cyl_ymin, cyl_ymax, t_shadow_cyl, n_dummy) && t_shadow_cyl > 0.0 && t_shadow_cyl < length(light_pos - hit);
-            if (shadow_sphere || shadow_pyr || shadow_pyr3 || shadow_box || shadow_cyl) shadow += 1.0;
-        }
-        shadow = 1.0 - shadow / float(shadow_samples);
-        shadow = mix(1.0, 0.2, 1.0 - shadow);
-        vec3 pyr3_color = vec3(0.2, 1.0, 0.3); // สีเขียว
-        vec3 color = pyr3_color * (ambient + diff * shadow) + spec * vec3(1.0);
-        FragColor = vec4(color, 1.0);
-    } else if (use_box) {
-        vec3 hit = ro + rd * t_box;
-        vec3 normal = n_box;
-        vec3 light_dir = normalize(light_pos - hit);
-        float diff = max(dot(normal, light_dir), 0.0);
-        float ambient = 0.22;
-        vec3 view_dir = normalize(ro - hit);
-        vec3 reflect_dir = reflect(-light_dir, normal);
-        float spec = 0.25 * pow(max(dot(view_dir, reflect_dir), 0.0), 20.0);
-        // Soft shadow (sample หลายทิศทาง, ตรวจสอบ sphere/pyramid/box)
-        float shadow = 0.0;
-        int shadow_samples = 8;
-        for (int i = 0; i < shadow_samples; ++i) {
-            float angle = 6.28318 * float(i) / float(shadow_samples);
-            vec3 offset = 0.025 * (cos(angle) * normal + sin(angle) * cross(normal, light_dir));
-            float t_shadow, t_shadow_pyr, t_shadow_box;
-            vec3 n_dummy;
-            bool shadow_sphere = intersectSphere(hit + normal * 0.001 + offset, light_dir, t_shadow) && t_shadow > 0.0;
-            bool shadow_pyr = intersectPyramid(hit + normal * 0.001 + offset, light_dir, t_shadow_pyr, n_dummy) && t_shadow_pyr > 0.0 && t_shadow_pyr < length(light_pos - hit);
-            bool shadow_box = intersectBox(hit + normal * 0.001 + offset, light_dir, box_min, box_max, t_shadow_box, n_dummy) && t_shadow_box > 0.0 && t_shadow_box < length(light_pos - hit);
-            if (shadow_sphere || shadow_pyr || shadow_box) shadow += 1.0;
-        }
-        shadow = 1.0 - shadow / float(shadow_samples);
-        shadow = mix(1.0, 0.3, 1.0 - shadow);
-        vec3 box_color = vec3(0.2, 0.6, 1.0); // สีฟ้า
-        vec3 color = box_color * (ambient + diff * shadow) + spec * vec3(1.0);
-        FragColor = vec4(color, 1.0);
-    } else if (use_cyl) {
-        vec3 hit = ro + rd * t_cyl;
-        vec3 normal = n_cyl;
-        vec3 light_dir = normalize(light_pos - hit);
-        float diff = max(dot(normal, light_dir), 0.0);
-        float ambient = 0.22;
-        vec3 view_dir = normalize(ro - hit);
-        vec3 reflect_dir = reflect(-light_dir, normal);
-        float spec = 0.22 * pow(max(dot(view_dir, reflect_dir), 0.0), 18.0);
-        // Soft shadow (sample หลายทิศทาง, ตรวจสอบทุกวัตถุ)
-        float shadow = 0.0;
-        int shadow_samples = 8;
-        for (int i = 0; i < shadow_samples; ++i) {
-            float angle = 6.28318 * float(i) / float(shadow_samples);
-            vec3 offset = 0.025 * (cos(angle) * normal + sin(angle) * cross(normal, light_dir));
-            float t_shadow, t_shadow_pyr, t_shadow_box, t_shadow_cyl = 0.0;
-            vec3 n_dummy;
-            bool shadow_sphere = intersectSphere(hit + normal * 0.001 + offset, light_dir, t_shadow) && t_shadow > 0.0;
-            bool shadow_pyr = intersectPyramid(hit + normal * 0.001 + offset, light_dir, t_shadow_pyr, n_dummy) && t_shadow_pyr > 0.0 && t_shadow_pyr < length(light_pos - hit);
-            bool shadow_box = intersectBox(hit + normal * 0.001 + offset, light_dir, box_min, box_max, t_shadow_box, n_dummy) && t_shadow_box > 0.0 && t_shadow_box < length(light_pos - hit);
-            bool shadow_cyl = intersectCylinder(hit + normal * 0.001 + offset, light_dir, cyl_center, cyl_radius, cyl_ymin, cyl_ymax, t_shadow_cyl, n_dummy) && t_shadow_cyl > 0.0 && t_shadow_cyl < length(light_pos - hit);
-            if (shadow_sphere || shadow_pyr || shadow_box || shadow_cyl) shadow += 1.0;
-        }
-        shadow = 1.0 - shadow / float(shadow_samples);
-        shadow = mix(1.0, 0.25, 1.0 - shadow);
-        vec3 cyl_color = vec3(1.0, 0.5, 0.1); // สีส้ม
-        vec3 color = cyl_color * (ambient + diff * shadow) + spec * vec3(1.0);
-        FragColor = vec4(color, 1.0);
-    } else {
-        // Ground plane at y = -0.7
-        float t_plane = ( -0.7 - ro.y ) / rd.y;
-        if (t_plane > 0.0) {
-            vec3 hit = ro + rd * t_plane;
-            vec3 light_dir = normalize(light_pos - hit);
-            float diff = max(dot(vec3(0,1,0), light_dir), 0.0);
-            float ambient = 0.25;
-            // Soft shadow from sphere (เพิ่ม sample เป็น 12 ทิศทาง)
-            float shadow = 0.0;
-            int shadow_samples = 12;
-            for (int i = 0; i < shadow_samples; ++i) {
-                float angle = 6.28318 * float(i) / float(shadow_samples);
-                vec3 offset = 0.02 * (cos(angle) * vec3(0,1,0) + sin(angle) * vec3(1,0,0));
-                float t_shadow, t_shadow_pyr, t_shadow_pyr3, t_shadow_box, t_shadow_cyl = 0.0;
-                vec3 n_dummy;
-                bool shadow_sphere = intersectSphere(hit + vec3(0,1,0) * 0.001 + offset, light_dir, t_shadow) && t_shadow > 0.0;
-                bool shadow_pyr = intersectPyramid(hit + vec3(0,1,0) * 0.001 + offset, light_dir, t_shadow_pyr, n_dummy) && t_shadow_pyr > 0.0 && t_shadow_pyr < length(light_pos - hit);
-                bool shadow_pyr3 = intersectPyramid3(hit + vec3(0,1,0) * 0.001 + offset, light_dir, t_shadow_pyr3, n_dummy) && t_shadow_pyr3 > 0.0 && t_shadow_pyr3 < length(light_pos - hit);
-                bool shadow_box = intersectBox(hit + vec3(0,1,0) * 0.001 + offset, light_dir, box_min, box_max, t_shadow_box, n_dummy) && t_shadow_box > 0.0 && t_shadow_box < length(light_pos - hit);
-                bool shadow_cyl = intersectCylinder(hit + vec3(0,1,0) * 0.001 + offset, light_dir, cyl_center, cyl_radius, cyl_ymin, cyl_ymax, t_shadow_cyl, n_dummy) && t_shadow_cyl > 0.0 && t_shadow_cyl < length(light_pos - hit);
-                if (shadow_sphere || shadow_pyr || shadow_pyr3 || shadow_box || shadow_cyl) shadow += 1.0;
-            }
-            shadow = 1.0 - shadow / float(shadow_samples); // เงาเนียนขึ้น
-            shadow = mix(1.0, 0.8, 1.0 - shadow); // blend เงาให้เนียน
-            // Checkerboard pattern กลับมา
-            float checker = mod(floor(hit.x*3.0)+floor(hit.z*3.0),2.0);
-            // ทำให้สี checkerboard อ่อนลง
-            vec3 ground_col = mix(bg_color, bg_color * 0.9 + vec3(1.0,1.0,1.0)*0.1, checker);
-            float shade = ambient + diff * shadow;
-            shade = mix(shade, ambient, 0.18);
-            vec3 color = ground_col * shade;
-            FragColor = vec4(color, 1.0);
-        } else {
-            // Sky gradient
-            float t = 0.5 * (rd.y + 1.0);
-            vec3 sky = mix(vec3(0.7,0.8,1.0), vec3(1.0,1.0,1.0), t);
-            FragColor = vec4(sky, 1.0);
+    if (intersectCylinder(ro, rd, cyl_center, cyl_radius, cyl_ymin, cyl_ymax, t_cyl, n_cyl)) {
+        if (t_cyl > 0.001 && t_cyl < hit.t) {
+            hit.t = t_cyl;
+            hit.normal = n_cyl;
+            hit.color = vec3(1.0, 0.5, 0.1);
+            hit.reflect = 0.22;
+            found = true;
         }
     }
+    // Ground plane
+    float t_plane = (-0.7 - ro.y) / rd.y;
+    if (t_plane > 0.001 && t_plane < hit.t) {
+        vec3 phit = ro + rd * t_plane;
+        hit.t = t_plane;
+        hit.normal = vec3(0,1,0);
+        float checker = mod(floor(phit.x*3.0)+floor(phit.z*3.0),2.0);
+        hit.color = mix(bg_color, bg_color * 0.9 + vec3(1.0,1.0,1.0)*0.1, checker);
+        hit.reflect = 0.08;
+        found = true;
+    }
+    return found;
+}
+
+// Lighting calculation
+vec3 computeLighting(vec3 hit, vec3 normal, vec3 view_dir, vec3 color) {
+    vec3 light_dir = normalize(light_pos - hit);
+    float diff = 0.6 * max(dot(normal, light_dir), 0.0); // เพิ่มความเข้มของแสงกระจาย
+    float ambient = 0.2;
+    float spec = 0.001 * pow(max(dot(view_dir, reflect(-light_dir, normal)), 0.0), 18.0); // ลด specular
+    // Soft shadow (ลดขนาดลำแสง)
+    float shadow = 0.0;
+    vec3 shadowColor = vec3(0.0);
+    int shadow_samples = 2;
+    for (int i = 0; i < shadow_samples; ++i) {
+        float angle = 6.28318 * float(i) / float(shadow_samples);
+        vec3 offset = 0.001 * (cos(angle) * normal + sin(angle) * cross(normal, light_dir)); // ลด offset ให้ลำแสงแคบลง
+        HitInfo sh;
+        if (sceneIntersect(hit + normal * 0.001 + offset, light_dir, sh) && sh.t < length(light_pos - hit)) {
+            shadow += 1.0;
+            shadowColor += sh.color;
+        }
+    }
+    float shadowFactor = 0.9 - shadow / float(shadow_samples);
+    shadowColor = (shadow > 0.0) ? shadowColor / shadow : vec3(1.0);
+    shadowFactor = mix(1.0, 0.01, 1.0 - shadowFactor); // เพิ่มค่าขั้นต่ำของเงาให้สว่างขึ้น
+    float shade = ambient + diff * shadowFactor;
+    return color * shade * shadowColor + spec * vec3(1.0);
+}
+
+// Recursive ray tracing
+vec3 trace(vec3 ro, vec3 rd) {
+    vec3 col = vec3(0.0);
+    vec3 attenuation = vec3(1.0);
+    for (int i = 0; i < MAX_DEPTH; i++) {
+        HitInfo hit;
+        if (sceneIntersect(ro, rd, hit)) {
+            vec3 phit = ro + rd * hit.t;
+            vec3 view_dir = normalize(ro - phit);
+            vec3 local_col = computeLighting(phit, hit.normal, view_dir, hit.color);
+            col += attenuation * local_col;
+            if (hit.reflect < 0.01) return col;
+            ro = phit + hit.normal * 0.002;
+            rd = reflectRay(rd, hit.normal);
+            attenuation *= hit.reflect;
+        } else {
+            col += attenuation * vec3(0.0, 0.0, 0.0);
+            return col;
+        }
+    }
+    return col;
+}
+
+void main() {
+    vec3 ro = camera_pos;
+    vec2 uv = (gl_FragCoord.xy / vec2(800, 600)) * 2.0 - 1.0;
+    uv.x *= 800.0/600.0;
+    uv *= camera_zoom;
+    vec3 rd = normalize(vec3(uv, -1.5));
+    vec3 color = trace(ro, rd);
+    FragColor = vec4(color, 1.0);
 }
 """
 # ฟังก์ชันสำหรับคอมไพล์ shader GLSL (vertex หรือ fragment)
@@ -480,7 +405,9 @@ def display():
     # Set uniforms
     glUniform3f(glGetUniformLocation(shader_program, 'sphere_center'), -0.5, 0.0, 0.0)
     glUniform1f(glGetUniformLocation(shader_program, 'sphere_radius'), 0.3)
-    glUniform3f(glGetUniformLocation(shader_program, 'light_pos'), 2.0, 2.0, 2.0)
+    glUniform3f(glGetUniformLocation(shader_program, 'light_pos'), 2.0, 1.0, 2.0)
+    # เปลี่ยนสีแหล่งกำเนิดแสงเป็นโทนร้อน (เช่น ส้ม)
+    glUniform3f(glGetUniformLocation(shader_program, 'light_color'), 1.0, 0.7, 0.3);
     glUniform3f(glGetUniformLocation(shader_program, 'sphere_color'), 1.0, 0.1, 0.1)
     glUniform3f(glGetUniformLocation(shader_program, 'bg_color'), 0.8, 0.8, 0.8)
     # Pass camera position and zoom as uniforms
