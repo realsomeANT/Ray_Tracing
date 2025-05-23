@@ -447,7 +447,8 @@ void main() {
     }
 }
 """
-
+# ฟังก์ชันสำหรับคอมไพล์ shader GLSL (vertex หรือ fragment)
+# ใช้เมื่อเราต้องการสร้าง shader object จาก source code GLSL
 def compile_shader(source, shader_type):
     shader = glCreateShader(shader_type)
     glShaderSource(shader, source)
@@ -456,6 +457,8 @@ def compile_shader(source, shader_type):
         raise RuntimeError(glGetShaderInfoLog(shader))
     return shader
 
+# ฟังก์ชันสำหรับสร้าง shader program
+# ใช้เมื่อเราต้องการรวม vertex shader และ fragment shader เข้าด้วยกัน
 def create_shader_program():
     vs = compile_shader(vertex_shader, GL_VERTEX_SHADER)
     fs = compile_shader(fragment_shader, GL_FRAGMENT_SHADER)
@@ -469,6 +472,8 @@ def create_shader_program():
     glDeleteShader(fs)
     return program
 
+# ฟังก์ชัน callback สำหรับวาดภาพ (render scene)
+# จะถูกเรียกโดยอัตโนมัติเมื่อหน้าต่างต้องการวาดใหม่
 def display():
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glUseProgram(shader_program)
@@ -486,6 +491,8 @@ def display():
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
     glutSwapBuffers()
 
+# ฟังก์ชัน callback สำหรับเปลี่ยนขนาดหน้าต่าง
+# ใช้ปรับ viewport ให้ตรงกับขนาดใหม่ของหน้าต่าง
 def reshape(width, height):
     glViewport(0, 0, width, height)
 
@@ -493,6 +500,9 @@ def reshape(width, height):
 camera_pos = [0.0, -0.5, 2.0]  # [x, y, z]
 camera_zoom = 1.0
 
+
+# ฟังก์ชัน callback สำหรับรับ input จากแป้นพิมพ์
+# ใช้ควบคุมตำแหน่งกล้อง (pan) และซูมเข้า/ออก
 # --- Keyboard controls for pan/zoom ---
 def keyboard(key, x, y):
     global camera_pos, camera_zoom
@@ -516,6 +526,9 @@ def keyboard(key, x, y):
         camera_zoom += zoom_step  # zoom out
     glutPostRedisplay()
 
+
+# ฟังก์ชันหลักสำหรับเริ่มต้นโปรแกรมและสร้างหน้าต่าง OpenGL
+# ใช้สำหรับเซ็ตอัพทุกอย่างก่อนเข้าสู่ loop หลักของ GLUT
 def main():
     global shader_program, vao
     glutInit(sys.argv)
@@ -542,5 +555,6 @@ def main():
     glutKeyboardFunc(keyboard)
     glutMainLoop()
 
+# จุดเริ่มต้นโปรแกรม
 if __name__ == '__main__':
     main()
